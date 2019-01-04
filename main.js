@@ -1,5 +1,15 @@
 // AdHell 3 update checker script
+// How it works:
+//   Polls folder revision. If revision is newer:
+//   Polls folder content. If any of the files are new:
+//   Check if its AdHell (3.1.x, non-themed)
+//   If yes, check version and notify for app update if available
+//   If no, just list the new filenames with links
+//   Mechanism for acknowledging new files so they don't show up again
+//     Maintain an array of quickkeys, only update them
 // TODO: Rearrange for tidiness including async function extraction
+
+// "use strict"; // TODO: Does Tasker need this?
 
 // Replacement global functions
 const global = varName => {
@@ -17,11 +27,25 @@ const addParams = (endpoint, params) =>
     return acc;
   }, endpoint);
 
-// Check local_rev and initialise if necessary
-if (global("LOCAL_REV") === "") {
-  console.log("No local revision stored, setting to zero");
+const globalArr = arrName => {
+  const arr = global(arrName).split(",");
+  return arr.length === 1 && arr[0] === "" ? [] : arr;
+};
+const setGlobalArr = (arrName, arr) => setGlobal(arrName, arr.join(","));
+
+// Check for first run and initialise global variables
+if (global("LOCAL_VER") === "") {
+  console.log("First run detected. Prompting for AdHell version...");
+  setGlobal("LOCAL_VER", prompt("Enter current AdHell version:", "3.1.1.242"));
   setGlobal("LOCAL_REV", 0);
-} else console.log(`Local revision stored at ${global("LOCAL_REV")}`);
+  setGlobalArr("LOCAL_QUICKKEYS", []); // Global arrays must be strings
+}
+console.log(
+  `Current folder revision: ${global("LOCAL_REV")}
+Current app version: ${global("LOCAL_VER")}
+Quickkeys:`,
+  globalArr("LOCAL_QUICKKEYS")
+);
 
 // Set initial variables
 const folderKey = "sb37c6gmhqgbn";
@@ -37,9 +61,17 @@ const params = {
 
 const requestUrl = addParams(new URL(getInfoPath, serverUrl), params);
 
+// TODO: Refactor success errors into a single class for both requests
+
 fetch(requestUrl)
   .then(response => response.json())
   .then(data => {
+    /**
+     * @param data.response.current_api_version
+     * @param data.response.folder_info
+     * @param data.response.folder_info.revision
+     */
+
     if (data.response.result !== "Success")
       throw new Error(`API Error: ${data.response.message}`);
     const latestApiVersion = data.response.current_api_version;
@@ -67,10 +99,34 @@ fetch(requestUrl)
       fetch(contentRequestUrl)
         .then(response => response.json())
         .then(contentData => {
-          if (contentData.response.asynchronous === "yes" || contentData.response.more_chunks === "yes")
+          /**
+           * @param contentData.response.asynchronous
+           * @param contentData.response.folder_content
+           * @param contentData.response.folder_content.more_chunks
+           */
+          if (contentData.response.result !== "Success")
+            throw new Error(`API Error: ${contentData.response.message}`);
+          if (
+            contentData.response.asynchronous !== "no" ||
+            contentData.response.folder_content.more_chunks !== "no"
+          )
             throw new Error("Unexpected response parameters");
-          console.log(contentData)
+          console.log(contentData);
+
+          // Convert file array into a map
+          const remoteFileMap = new Map(
+            contentData.response.folder_content.files.map(
+              ({ quickkey, ...value }) => [quickkey, value]
+            )
+          );
+
+          const newKeys = [...remoteFileMap.keys()].filter(
+            key => !globalArr("LOCAL_QUICKKEYS").includes(key)
+          );
+          const newNames = newKeys.map(key => remoteFileMap.get(key).filename);
+
+          console.log(newNames);
         });
-    } else console.log("No new folder revision");
+    } else console.log("No new folder revision. Task complete.");
   })
   .catch(err => console.error(err));
