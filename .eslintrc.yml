@@ -3,3 +3,8 @@ extends:
   - prettier
 env:
   browser: true
+globals:
+  global: false
+  setGlobal: false
+  flash: false
+  exit: false
